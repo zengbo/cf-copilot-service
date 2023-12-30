@@ -7,8 +7,9 @@ addEventListener('fetch', event => {
 async function handleRequest(request) {
   const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Methods': '*',
     'Access-Control-Allow-Headers': '*',
+    'Access-Control-Allow-Credentials': 'true',
   }
 
   if (request.method === 'OPTIONS') {
@@ -47,16 +48,35 @@ async function handleRequest(request) {
       body: typeof requestData === 'object' ? JSON.stringify(requestData) : '{}',
     })
 
-    const { readable, writable } = new TransformStream();
-    streamResponse(openAIResponse, writable);
-    return new Response(readable, {
-      headers: {
-        ...corsHeaders,
-        'Content-Type': 'text/event-stream; charset=utf-8',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-      }
-    });
+    if (requestData && requestData.stream !== true) {
+      const results = await openAIResponse.json();
+      return new Response(JSON.stringify(results), {
+        status: openAIResponse.status,
+        headers: {
+          ...corsHeaders,
+          "Content-Type": "application/json",
+        }
+      });
+    } else {
+      const { readable, writable } = new TransformStream();
+      streamResponse(openAIResponse, writable);
+      return new Response(readable, {
+        headers: {
+          ...corsHeaders,
+          'Content-Type': 'text/event-stream',
+        }
+      });
+      /*
+      return new Response(openAIResponse.body, {
+        headers: {
+          ...corsHeaders,
+          'Content-Type': 'text/event-stream',
+        }
+      });
+      */
+    }
+
+
   } catch (error) {
     return new Response(error.message, {
       status: 500,
@@ -77,7 +97,7 @@ async function streamResponse(openAIResponse, writable) {
         writer.close();
         return;
       }
-      const chunk = decoder.decode(value, { stream: true });
+      const chunk = decoder.decode(value, { stream: true }).replace(/{"content":null,"role":null}}/g, '{}');
       writer.write(encoder.encode(chunk));
       push();
     }).catch(error => {
@@ -90,7 +110,8 @@ async function streamResponse(openAIResponse, writable) {
 }
 
 async function getCopilotToken(githubToken) {
-  let tokenData = await GithubCopilotChat.get("copilotToken", "json");
+  const kvKey = "copilotToken:" + githubToken;
+  let tokenData = await GithubCopilotChat.get(kvKey, "json");
   
   if (tokenData && tokenData.expires_at > Date.now()) {
     return tokenData.token;
@@ -113,7 +134,7 @@ async function getCopilotToken(githubToken) {
   const data = await response.json();
   const expires_at = Date.now() + data.expires_in * 1000; 
 
-  await GithubCopilotChat.put("copilotToken", JSON.stringify({ token: data.token, expires_at }), {
+  await GithubCopilotChat.put(kvKey, JSON.stringify({ token: data.token, expires_at }), {
     expirationTtl: data.expires_in 
   });
 
@@ -132,12 +153,12 @@ async function createHeaders(copilotToken) {
     'X-Request-Id': `${genHexStr(8)}-${genHexStr(4)}-${genHexStr(4)}-${genHexStr(4)}-${genHexStr(12)}`,
     'Vscode-Sessionid': `${genHexStr(8)}-${genHexStr(4)}-${genHexStr(4)}-${genHexStr(4)}-${genHexStr(25)}`,
     'Vscode-Machineid': genHexStr(64),
-    'Editor-Version': 'vscode/1.83.1',
-    'Editor-Plugin-Version': 'copilot-chat/0.8.0',
+    'Editor-Version': 'vscode/1.85.1',
+    'Editor-Plugin-Version': 'copilot-chat/0.12.2023120701',
     'Openai-Organization': 'github-copilot',
     'Openai-Intent': 'conversation-panel',
-    'Content-Type': 'text/event-stream; charset=utf-8',
     'User-Agent': 'GitHubCopilotChat/0.8.0',
+    'Content-Type': 'application/json',
     'Accept': '*/*',
     'Accept-Encoding': 'gzip,deflate,br',
     'Connection': 'close'
